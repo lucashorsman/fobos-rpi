@@ -37,7 +37,7 @@ async def video_handler(websocket, broadcaster: FrameBroadcaster):
         logger.info("Video client disconnected: %s", websocket.remote_address)
 
 
-async def control_handler(websocket, laser: LaserController):
+async def control_handler(websocket, laser: LaserController, processor: "CameraProcessor"):
     logger.info("Control client connected: %s", websocket.remote_address)
     try:
         async for message in websocket:
@@ -56,8 +56,24 @@ async def control_handler(websocket, laser: LaserController):
                 laser.off()
             elif action == "laser_set_intensity":
                 laser.set_intensity(float(cmd.get("value", 0.0)))
+            elif action == "set_exposure":
+                exposure_us = cmd.get("value")
+                if exposure_us is None:
+                    reply = {"ok": False, "error": "missing 'value' (exposure_us)"}
+                else:
+                    processor.set_exposure(float(exposure_us))
+            elif action == "set_gain":
+                gain_db = cmd.get("value")
+                if gain_db is None:
+                    reply = {"ok": False, "error": "missing 'value' (gain_db)"}
+                else:
+                    processor.set_gain(float(gain_db))
+            elif action == "camera_status":
+                reply["camera"] = processor.status()
             elif action == "status":
-                reply["status"] = laser.status()
+                # StreamWorker reads reply["status"] to fire laser_status_received.
+                # Keep everything under that key; include camera state alongside laser.
+                reply["status"] = {**laser.status(), "camera": processor.status()}
             elif action == "ping":
                 reply["cmd"] = "pong"
             else:
@@ -68,13 +84,13 @@ async def control_handler(websocket, laser: LaserController):
         logger.info("Control client disconnected: %s", websocket.remote_address)
 
 
-def make_router(broadcaster: FrameBroadcaster, laser: LaserController):
+def make_router(broadcaster: FrameBroadcaster, laser: LaserController, processor: "CameraProcessor"):
     async def router(websocket):
         path = websocket.request.path if hasattr(websocket, "request") else websocket.path
         if path == "/video":
             await video_handler(websocket, broadcaster)
         elif path == "/control":
-            await control_handler(websocket, laser)
+            await control_handler(websocket, laser, processor)
         else:
             await websocket.close(code=1008, reason=f"unknown path {path}")
     return router
@@ -89,7 +105,7 @@ async def async_main(args):
     capture_thread = threading.Thread(target=processor.start, daemon=True)
     capture_thread.start()
 
-    router = make_router(broadcaster, laser)
+    router = make_router(broadcaster, laser, processor)
     async with websockets.serve(router, "0.0.0.0", args.port, max_size=None):
         logger.info("Bridge listening on port %d (/video, /control)", args.port)
         try:

@@ -82,6 +82,9 @@ class CameraProcessor:
         self._running = False
         self._frame_count = 0
         self._last_fps_log = time.monotonic()
+        # Cached values so status() can report them even between frames.
+        self._exposure_us: Optional[float] = None
+        self._gain_db: Optional[float] = None
 
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
         """
@@ -113,6 +116,65 @@ class CameraProcessor:
         finally:
             cam.queue_frame(frame)
 
+    # ------------------------------------------------------------------
+    # Camera settings control (thread-safe: called from asyncio thread
+    # while the capture loop runs in the same thread inside start()).
+    # ------------------------------------------------------------------
+
+    def set_exposure(self, exposure_us: float) -> None:
+        """Set camera exposure time in microseconds.
+
+        Mirrors VimbaWorker.set_exposure: tries the modern GenICam feature
+        name first (ExposureTime), then the legacy alias (ExposureTimeAbs).
+        """
+        if self._cam is None:
+            logger.warning("set_exposure called but camera is not open")
+            return
+        try:
+            self._cam.ExposureTime.set(float(exposure_us))
+            self._exposure_us = float(exposure_us)
+            logger.info("Exposure set to %.1f us", exposure_us)
+        except Exception:
+            try:
+                self._cam.ExposureTimeAbs.set(float(exposure_us))
+                self._exposure_us = float(exposure_us)
+                logger.info("Exposure set to %.1f us (via ExposureTimeAbs)", exposure_us)
+            except Exception as e:
+                logger.error("Failed to set exposure: %s", e)
+
+    def set_gain(self, gain_db: float) -> None:
+        """Set camera gain in dB.
+
+        Mirrors VimbaWorker.set_gain: tries Gain first, then GainRaw.
+        """
+        if self._cam is None:
+            logger.warning("set_gain called but camera is not open")
+            return
+        try:
+            self._cam.Gain.set(float(gain_db))
+            self._gain_db = float(gain_db)
+            logger.info("Gain set to %.2f dB", gain_db)
+        except Exception:
+            try:
+                self._cam.GainRaw.set(float(gain_db))
+                self._gain_db = float(gain_db)
+                logger.info("Gain set to %.2f dB (via GainRaw)", gain_db)
+            except Exception as e:
+                logger.error("Failed to set gain: %s", e)
+
+    def status(self) -> dict:
+        """Return current camera settings as a dict for the control channel."""
+        return {
+            "exposure_us": self._exposure_us,
+            "gain_db": self._gain_db,
+            "camera_id": self._cam.get_id() if self._cam is not None else None,
+            "running": self._running,
+        }
+
+    # ------------------------------------------------------------------
+    # Capture loop
+    # ------------------------------------------------------------------
+
     def start(self) -> None:
         if not VMBPY_AVAILABLE:
             logger.warning("vmbpy not available -- starting synthetic test-pattern feed instead")
@@ -131,6 +193,15 @@ class CameraProcessor:
                     self._cam.set_pixel_format(vmbpy.PixelFormat.Bgr8)
                 except Exception:
                     self._cam.set_pixel_format(vmbpy.PixelFormat.Mono8)
+
+                # Disable auto modes so manually-set values take effect
+                # immediately, matching the VimbaWorker approach in fobos-gui.
+                for feat_name in ("ExposureAuto", "GainAuto"):
+                    try:
+                        getattr(self._cam, feat_name).set("Off")
+                        logger.info("%s disabled", feat_name)
+                    except Exception:
+                        pass  # feature may not exist on all cameras
 
                 self._running = True
                 logger.info("Capture loop started from camera %s", self._cam.get_id())
