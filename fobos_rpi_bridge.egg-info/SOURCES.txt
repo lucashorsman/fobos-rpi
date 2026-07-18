@@ -1,0 +1,7 @@
+pyproject.toml
+fobos_rpi_bridge.egg-info/PKG-INFO
+fobos_rpi_bridge.egg-info/SOURCES.txt
+fobos_rpi_bridge.egg-info/dependency_links.txt
+fobos_rpi_bridge.egg-info/entry_points.txt
+fobos_rpi_bridge.egg-info/requires.txt
+fobos_rpi_bridge.egg-info/top_level.txt

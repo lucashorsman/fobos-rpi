@@ -1,0 +1,2 @@
+[console_scripts]
+fobos-bridge = rpi_bridge.main:main

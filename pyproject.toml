@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fobos-rpi-bridge"
+version = "0.1.0"
+description = "RPi5 bridge for FOBOS: local Vimba camera capture + laser GPIO control, streamed to the host GUI over WebSocket"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Lucas Horsman" },
+]
+
+dependencies = [
+    "opencv-python-headless>=4.9",
+    "numpy>=1.26",
+    "websockets>=12.0",
+    "gpiozero>=2.0",
+    "psutil>=5.9",
+    # vmbpy is NOT on PyPI -- it ships with Allied Vision's Vimba X SDK.
+    # Install the SDK on the Pi, then `pip install` the wheel it drops
+    # (typically under the SDK's api/python directory) into this venv
+    # before running the bridge. Without it, camera_stream_server.py
+    # falls back to a synthetic test-pattern feed automatically.
+    "vmbpy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+
+[tool.uv.sources]
+vmbpy = { path = "vmbpy-1.0.4-py3-none-any.whl" }
+
+
+[project.scripts]
+fobos-bridge = "rpi_bridge.main:main"
+
+[tool.setuptools.packages.find]
+include = ["rpi_bridge*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
