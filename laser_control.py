@@ -1,14 +1,11 @@
 """
 laser_control.py
 
-Direct GPIO control of the laser diode via transistor switching, running on
-the RPi5 itself. 
+Direct GPIO control of the laser diode via the AQY212 chip.
 Uses gpiozero (PWMLED) so we get both a simple on/off API and intensity
 control for free, without hand-rolling PWM.
-
-Wire the transistor base (through its base resistor) to GPIO_PIN. Adjust
-GPIO_PIN to whatever you actually wired -- default here is BCM 18 since it's
-a hardware PWM pin on the Pi5.
+Wire the transistor base (through its base resistor) to GPIO_PIN.
+Default here is GPIO 17.
 """
 
 import logging
@@ -36,7 +33,7 @@ else:
 class LaserController:
     """Thin wrapper so main.py doesn't care whether GPIO is real or stubbed."""
 
-    def __init__(self, gpio_pin: int = 18):
+    def __init__(self, gpio_pin: int = 17):
         self.gpio_pin = gpio_pin
         self._intensity = 0.0
         self._led = None

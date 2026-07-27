@@ -8,7 +8,7 @@ Entry point for the RPi5 bridge. Starts:
       ws://<pi-host>:8765/video    -> binary JPEG frames, Pi -> host only
       ws://<pi-host>:8765/control  -> JSON commands, host -> Pi, JSON replies back
 
-Run with: python3 main.py [--port 8765] [--camera-id <id>] [--laser-pin 18]
+Run with: python3 main.py [--port 8765] [--camera-id <id>] [--laser-pin 17]
 """
 
 import argparse
@@ -119,7 +119,7 @@ def main():
     parser = argparse.ArgumentParser(description="FOBOS RPi5 bridge")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--camera-id", type=str, default=None)
-    parser.add_argument("--laser-pin", type=int, default=18)
+    parser.add_argument("--laser-pin", type=int, default=17)
     args = parser.parse_args()
 
     try:
