@@ -80,6 +80,9 @@ class CameraProcessor:
         self.camera_id = camera_id
         self._cam = None
         self._running = False
+        self._capturing = False
+        self._error: Optional[str] = None
+        self._last_frame_time: Optional[float] = None
         self._frame_count = 0
         self._last_fps_log = time.monotonic()
         # Cached values so status() can report them even between frames.
@@ -127,17 +130,16 @@ class CameraProcessor:
         Mirrors VimbaWorker.set_exposure: tries the modern GenICam feature
         name first (ExposureTime), then the legacy alias (ExposureTimeAbs).
         """
+        self._exposure_us = float(exposure_us)
         if self._cam is None:
-            logger.warning("set_exposure called but camera is not open")
+            logger.warning("set_exposure called but camera is not open (cached for when open)")
             return
         try:
             self._cam.ExposureTime.set(float(exposure_us))
-            self._exposure_us = float(exposure_us)
             logger.info("Exposure set to %.1f us", exposure_us)
         except Exception:
             try:
                 self._cam.ExposureTimeAbs.set(float(exposure_us))
-                self._exposure_us = float(exposure_us)
                 logger.info("Exposure set to %.1f us (via ExposureTimeAbs)", exposure_us)
             except Exception as e:
                 logger.error("Failed to set exposure: %s", e)
@@ -147,17 +149,16 @@ class CameraProcessor:
 
         Mirrors VimbaWorker.set_gain: tries Gain first, then GainRaw.
         """
+        self._gain_db = float(gain_db)
         if self._cam is None:
-            logger.warning("set_gain called but camera is not open")
+            logger.warning("set_gain called but camera is not open (cached for when open)")
             return
         try:
             self._cam.Gain.set(float(gain_db))
-            self._gain_db = float(gain_db)
             logger.info("Gain set to %.2f dB", gain_db)
         except Exception:
             try:
                 self._cam.GainRaw.set(float(gain_db))
-                self._gain_db = float(gain_db)
                 logger.info("Gain set to %.2f dB (via GainRaw)", gain_db)
             except Exception as e:
                 logger.error("Failed to set gain: %s", e)
@@ -167,8 +168,12 @@ class CameraProcessor:
         return {
             "exposure_us": self._exposure_us,
             "gain_db": self._gain_db,
-            "camera_id": self._cam.get_id() if self._cam is not None else None,
+            "camera_id": self._cam.get_id() if self._cam is not None else self.camera_id,
             "running": self._running,
+            "capturing": self._capturing,
+            "error": self._error,
+            "last_frame_time": self._last_frame_time,
+            "frame_count": self._frame_count,
         }
 
     # ------------------------------------------------------------------
@@ -181,50 +186,90 @@ class CameraProcessor:
             asyncio.run_coroutine_threadsafe(self._synthetic_feed_loop(), self.loop)
             return
 
-        with vmbpy.VmbSystem.get_instance() as vmb:
-            cams = vmb.get_all_cameras()
-            if not cams:
-                raise RuntimeError("No Allied Vision cameras detected")
-            self._cam = cams[0] if self.camera_id is None else next(
-                c for c in cams if c.get_id() == self.camera_id
-            )
-            with self._cam:
-                try:
-                    self._cam.set_pixel_format(vmbpy.PixelFormat.Bgr8)
-                except Exception:
-                    self._cam.set_pixel_format(vmbpy.PixelFormat.Mono8)
-
-                # Disable auto modes so manually-set values take effect
-                # immediately, matching the VimbaWorker approach in fobos-gui.
-                for feat_name in ("ExposureAuto", "GainAuto"):
-                    try:
-                        getattr(self._cam, feat_name).set("Off")
-                        logger.info("%s disabled", feat_name)
-                    except Exception:
-                        pass  # feature may not exist on all cameras
-
-                self._running = True
-                logger.info("Capture loop started from camera %s", self._cam.get_id())
-                while self._running:
-                    try:
-                        frame = self._cam.get_frame(timeout_ms=2000)
-                        img = frame.as_opencv_image()
-                        processed = self.process_frame(img)
-                        ok, jpeg = cv2.imencode(
-                            ".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
-                        )
-                        if ok:
-                            self.loop.call_soon_threadsafe(self.broadcaster.publish, jpeg.tobytes())
-                            self._frame_count += 1
-                            now = time.monotonic()
-                            if now - self._last_fps_log > 5.0:
-                                fps = self._frame_count / (now - self._last_fps_log)
-                                logger.info("Capture FPS: %.1f", fps)
-                                self._frame_count = 0
-                                self._last_fps_log = now
-                    except VmbTimeout:
-                        logger.warning("Camera frame wait timed out; retrying capture loop")
+        self._running = True
+        while self._running:
+            self._capturing = False
+            try:
+                with vmbpy.VmbSystem.get_instance() as vmb:
+                    cams = vmb.get_all_cameras()
+                    if not cams:
+                        self._error = "No Allied Vision cameras detected"
+                        logger.warning(self._error)
+                        time.sleep(2.0)
                         continue
+                    self._cam = cams[0] if self.camera_id is None else next(
+                        (c for c in cams if c.get_id() == self.camera_id), None
+                    )
+                    if self._cam is None:
+                        self._error = f"Camera ID {self.camera_id} not found"
+                        logger.warning(self._error)
+                        time.sleep(2.0)
+                        continue
+
+                    try:
+                        with self._cam:
+                            self._error = None
+                            try:
+                                self._cam.set_pixel_format(vmbpy.PixelFormat.Bgr8)
+                            except Exception:
+                                self._cam.set_pixel_format(vmbpy.PixelFormat.Mono8)
+
+                            # Disable auto modes so manually-set values take effect
+                            # immediately, matching the VimbaWorker approach in fobos-gui.
+                            for feat_name in ("ExposureAuto", "GainAuto"):
+                                try:
+                                    getattr(self._cam, feat_name).set("Off")
+                                    logger.info("%s disabled", feat_name)
+                                except Exception:
+                                    pass
+
+                            if self._exposure_us is not None:
+                                self.set_exposure(self._exposure_us)
+                            if self._gain_db is not None:
+                                self.set_gain(self._gain_db)
+
+                            self._capturing = True
+                            logger.info("Capture loop started from camera %s", self._cam.get_id())
+                            while self._running:
+                                try:
+                                    frame = self._cam.get_frame(timeout_ms=2000)
+                                    img = frame.as_opencv_image()
+                                    processed = self.process_frame(img)
+                                    ok, jpeg = cv2.imencode(
+                                        ".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
+                                    )
+                                    if ok:
+                                        self.loop.call_soon_threadsafe(self.broadcaster.publish, jpeg.tobytes())
+                                        self._frame_count += 1
+                                        self._last_frame_time = time.time()
+                                        now = time.monotonic()
+                                        if now - self._last_fps_log > 5.0:
+                                            fps = self._frame_count / (now - self._last_fps_log)
+                                            logger.info("Capture FPS: %.1f", fps)
+                                            self._frame_count = 0
+                                            self._last_fps_log = now
+                                except VmbTimeout:
+                                    logger.warning("Camera frame wait timed out; retrying capture loop")
+                                    continue
+                                except Exception as exc:
+                                    self._error = f"Frame capture error: {exc}"
+                                    logger.error("Error in camera capture loop: %s", exc)
+                                    break
+                    except Exception as exc:
+                        # Catch exceptions entering/exiting 'with self._cam:', including
+                        # vmbpy.error.VmbCameraError: <VmbError.Already: -33> on exit
+                        self._error = f"Camera session error: {exc}"
+                        logger.warning("Camera session error (caught cleanly): %s", exc)
+            except Exception as exc:
+                self._error = f"VmbSystem error: {exc}"
+                logger.error("VmbSystem error: %s", exc)
+            finally:
+                self._capturing = False
+                self._cam = None
+
+            if self._running:
+                logger.info("Retrying camera open/capture loop in 2.0s...")
+                time.sleep(2.0)
 
     def stop(self) -> None:
         self._running = False
