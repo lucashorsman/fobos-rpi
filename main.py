@@ -21,6 +21,7 @@ import websockets
 
 from camera_stream_server import CameraProcessor, FrameBroadcaster
 from laser_control import LaserController
+from web_preview import WebPreviewServer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("rpi_bridge.main")
@@ -105,12 +106,18 @@ async def async_main(args):
     capture_thread = threading.Thread(target=processor.start, daemon=True)
     capture_thread.start()
 
+    # Start the HTTP web preview server (MJPEG stream for browsers)
+    web = WebPreviewServer(broadcaster, processor=processor, port=args.web_port)
+    await web.start()
+
     router = make_router(broadcaster, laser, processor)
     async with websockets.serve(router, "0.0.0.0", args.port, max_size=None):
         logger.info("Bridge listening on port %d (/video, /control)", args.port)
+        logger.info("Web preview at http://0.0.0.0:%d/", args.web_port)
         try:
             await asyncio.Future()  # run forever
         finally:
+            await web.stop()
             processor.stop()
             laser.close()
 
@@ -118,6 +125,8 @@ async def async_main(args):
 def main():
     parser = argparse.ArgumentParser(description="FOBOS RPi5 bridge")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--web-port", type=int, default=8080,
+                        help="HTTP port for the browser camera preview (default: 8080)")
     parser.add_argument("--camera-id", type=str, default=None)
     parser.add_argument("--laser-pin", type=int, default=17)
     args = parser.parse_args()
