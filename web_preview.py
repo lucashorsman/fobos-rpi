@@ -21,6 +21,7 @@ import json
 import logging
 import time
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qs, urlparse
 
 if TYPE_CHECKING:
     from camera_stream_server import CameraProcessor, FrameBroadcaster
@@ -91,6 +92,48 @@ _HTML_PAGE = r"""<!DOCTYPE html>
     letter-spacing: -0.02em;
   }
   .logo span { color: var(--accent); }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .cam-select-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    border-radius: var(--radius);
+    transition: all 0.2s ease;
+  }
+  .cam-select-wrap:hover, .cam-select-wrap:focus-within {
+    border-color: rgba(255,255,255,0.25);
+    background: rgba(255,255,255,0.06);
+  }
+  .cam-select-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .cam-select-dropdown {
+    background: transparent;
+    color: var(--text);
+    border: none;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: inherit;
+    outline: none;
+    cursor: pointer;
+  }
+  .cam-select-dropdown option {
+    background: #151926;
+    color: var(--text);
+  }
 
   /* ---- status badge ---- */
   .badge {
@@ -238,9 +281,17 @@ _HTML_PAGE = r"""<!DOCTYPE html>
   <div class="header-left">
     <div class="logo"><span>FOBOS</span> Camera</div>
   </div>
-  <div class="badge waiting" id="statusBadge">
-    <span class="dot"></span>
-    <span id="statusLabel">Connecting</span>
+  <div class="header-right">
+    <div class="cam-select-wrap">
+      <label for="cameraSelect" class="cam-select-label">Camera</label>
+      <select id="cameraSelect" class="cam-select-dropdown">
+        <option value="">Loading cameras...</option>
+      </select>
+    </div>
+    <div class="badge waiting" id="statusBadge">
+      <span class="dot"></span>
+      <span id="statusLabel">Connecting</span>
+    </div>
   </div>
 </div>
 
@@ -282,6 +333,7 @@ _HTML_PAGE = r"""<!DOCTYPE html>
   const overlayTx = document.getElementById('overlayText');
   const badge     = document.getElementById('statusBadge');
   const badgeLbl  = document.getElementById('statusLabel');
+  const camSelect = document.getElementById('cameraSelect');
 
   let streamOk = false;
   let retryTimer = null;
@@ -322,6 +374,55 @@ _HTML_PAGE = r"""<!DOCTYPE html>
     }, 3000);
   }
 
+  async function loadCameras() {
+    try {
+      const r = await fetch('/cameras');
+      if (!r.ok) return;
+      const data = await r.json();
+      const cams = data.cameras || [];
+      const selected = data.selected_camera_id;
+
+      camSelect.innerHTML = '';
+      if (cams.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No cameras found';
+        camSelect.appendChild(opt);
+        return;
+      }
+
+      cams.forEach(function(c) {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = c.name || c.id;
+        if (selected ? c.id === selected : c.id === cams[0].id) {
+          opt.selected = true;
+        }
+        camSelect.appendChild(opt);
+      });
+    } catch(e) {}
+  }
+
+  camSelect.addEventListener('change', async function() {
+    const selectedId = camSelect.value;
+    if (!selectedId) return;
+    try {
+      streamOk = false;
+      overlay.classList.add('visible');
+      overlayTx.textContent = 'Switching camera…';
+      setStatus('waiting');
+      const r = await fetch('/select_camera?id=' + encodeURIComponent(selectedId), { method: 'POST' });
+      const res = await r.json();
+      if (res.ok) {
+        setTimeout(function() {
+          img.src = '/stream?t=' + Date.now();
+        }, 1000);
+      }
+    } catch(e) {
+      console.error('Camera switch failed:', e);
+    }
+  });
+
   // Poll /status for camera info
   async function pollStatus() {
     try {
@@ -340,6 +441,7 @@ _HTML_PAGE = r"""<!DOCTYPE html>
   }
   setInterval(pollStatus, 3000);
   pollStatus();
+  loadCameras();
 })();
 </script>
 </body>
@@ -350,18 +452,41 @@ _HTML_PAGE = r"""<!DOCTYPE html>
 # Minimal async HTTP helpers
 # ---------------------------------------------------------------------------
 
-async def _read_request(reader: asyncio.StreamReader) -> tuple[str, str]:
-    """Read the HTTP request line, consume headers, return (method, path)."""
+async def _read_request(reader: asyncio.StreamReader) -> tuple[str, str, dict[str, str], bytes]:
+    """Read the HTTP request line, headers, and body.
+
+    Returns (method, path, query_params, body).
+    """
     line = await asyncio.wait_for(reader.readline(), timeout=5.0)
     parts = line.decode("utf-8", errors="replace").strip().split()
     method = parts[0] if len(parts) >= 1 else ""
-    path = parts[1].split("?")[0] if len(parts) >= 2 else "/"   # strip query string
-    # Drain remaining headers
+    full_target = parts[1] if len(parts) >= 2 else "/"
+
+    parsed_url = urlparse(full_target)
+    path = parsed_url.path
+    raw_params = parse_qs(parsed_url.query)
+    query_params = {k: v[0] for k, v in raw_params.items() if v}
+
+    content_length = 0
+    # Drain headers and parse Content-Length
     while True:
         hdr = await asyncio.wait_for(reader.readline(), timeout=5.0)
-        if hdr in (b"\r\n", b"\n", b""):
+        hdr_str = hdr.decode("utf-8", errors="replace").strip()
+        if not hdr_str:
             break
-    return method, path
+        if ":" in hdr_str:
+            k, v = hdr_str.split(":", 1)
+            if k.strip().lower() == "content-length":
+                try:
+                    content_length = int(v.strip())
+                except ValueError:
+                    content_length = 0
+
+    body = b""
+    if content_length > 0:
+        body = await asyncio.wait_for(reader.readexactly(content_length), timeout=5.0)
+
+    return method, path, query_params, body
 
 
 def _http_response(status: str, content_type: str, body: bytes, extra_headers: str = "") -> bytes:
@@ -412,9 +537,9 @@ class WebPreviewServer:
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
-            method, path = await _read_request(reader)
-            if method != "GET":
-                writer.write(_http_response("405 Method Not Allowed", "text/plain", b"GET only"))
+            method, path, query_params, body = await _read_request(reader)
+            if method not in ("GET", "POST"):
+                writer.write(_http_response("405 Method Not Allowed", "text/plain", b"GET or POST only"))
                 await writer.drain()
                 return
 
@@ -426,6 +551,10 @@ class WebPreviewServer:
                 await self._serve_snapshot(writer)
             elif path == "/status":
                 await self._serve_status(writer)
+            elif path in ("/cameras", "/api/cameras"):
+                await self._serve_cameras(writer)
+            elif path in ("/select_camera", "/cameras/select", "/api/cameras/select"):
+                await self._serve_select_camera(writer, query_params, body)
             else:
                 writer.write(_http_response("404 Not Found", "text/plain", b"not found"))
                 await writer.drain()
@@ -494,3 +623,50 @@ class WebPreviewServer:
             extra_headers="Cache-Control: no-cache\r\n",
         ))
         await writer.drain()
+
+    async def _serve_cameras(self, writer: asyncio.StreamWriter) -> None:
+        cameras: list[dict] = []
+        selected: str | None = None
+        if self.processor is not None:
+            cameras = self.processor.list_cameras()
+            selected = self.processor.camera_id
+        res = {
+            "cameras": cameras,
+            "selected_camera_id": selected,
+        }
+        body = json.dumps(res).encode("utf-8")
+        writer.write(_http_response(
+            "200 OK", "application/json", body,
+            extra_headers="Cache-Control: no-cache\r\n",
+        ))
+        await writer.drain()
+
+    async def _serve_select_camera(
+        self, writer: asyncio.StreamWriter, query_params: dict[str, str], body: bytes
+    ) -> None:
+        camera_id = query_params.get("id") or query_params.get("camera_id")
+        if not camera_id and body:
+            try:
+                data = json.loads(body.decode("utf-8"))
+                if isinstance(data, dict):
+                    camera_id = data.get("camera_id") or data.get("id")
+            except Exception:
+                pass
+
+        if camera_id is not None and self.processor is not None:
+            self.processor.set_camera(camera_id)
+            res = {"ok": True, "camera_id": camera_id}
+        elif camera_id is None:
+            res = {"ok": False, "error": "missing 'id' or 'camera_id' parameter"}
+        else:
+            res = {"ok": False, "error": "camera processor unavailable"}
+
+        resp_bytes = json.dumps(res).encode("utf-8")
+        writer.write(_http_response(
+            "200 OK" if res.get("ok") else "400 Bad Request",
+            "application/json",
+            resp_bytes,
+            extra_headers="Cache-Control: no-cache\r\n",
+        ))
+        await writer.drain()
+

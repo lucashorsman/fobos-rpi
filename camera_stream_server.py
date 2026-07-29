@@ -163,12 +163,51 @@ class CameraProcessor:
             except Exception as e:
                 logger.error("Failed to set gain: %s", e)
 
+    def set_camera(self, camera_id: Optional[str]) -> None:
+        """Set target camera ID to capture from."""
+        old_id = self.camera_id
+        self.camera_id = str(camera_id) if camera_id is not None else None
+        logger.info("Target camera updated: %s -> %s", old_id, self.camera_id)
+
+    def list_cameras(self) -> list[dict]:
+        """Return list of available cameras."""
+        if not VMBPY_AVAILABLE:
+            return [
+                {"id": "synthetic_0", "name": "Synthetic Camera 1 (Default)", "model": "Mock-Vmb"},
+                {"id": "synthetic_1", "name": "Synthetic Camera 2 (Test Pattern)", "model": "Mock-Vmb"},
+            ]
+        try:
+            with vmbpy.VmbSystem.get_instance() as vmb:
+                cams = vmb.get_all_cameras()
+                result = []
+                for c in cams:
+                    try:
+                        cid = c.get_id()
+                    except Exception:
+                        continue
+                    name = getattr(c, "get_name", lambda: cid)()
+                    model = getattr(c, "get_model", lambda: "")()
+                    serial = getattr(c, "get_serial", lambda: "")()
+                    result.append({
+                        "id": cid,
+                        "name": str(name) if name else cid,
+                        "model": str(model) if model else "",
+                        "serial": str(serial) if serial else "",
+                    })
+                return result
+        except Exception as e:
+            logger.error("Failed to query Allied Vision cameras: %s", e)
+            return []
+
     def status(self) -> dict:
         """Return current camera settings as a dict for the control channel."""
+        active_id = self._cam.get_id() if self._cam is not None else self.camera_id
         return {
             "exposure_us": self._exposure_us,
             "gain_db": self._gain_db,
-            "camera_id": self._cam.get_id() if self._cam is not None else self.camera_id,
+            "camera_id": active_id,
+            "selected_camera_id": self.camera_id,
+            "available_cameras": self.list_cameras(),
             "running": self._running,
             "capturing": self._capturing,
             "error": self._error,
@@ -208,6 +247,7 @@ class CameraProcessor:
 
                     try:
                         with self._cam:
+                            active_cam_id = self._cam.get_id()
                             self._error = None
                             try:
                                 self._cam.set_pixel_format(vmbpy.PixelFormat.Bgr8)
@@ -229,8 +269,8 @@ class CameraProcessor:
                                 self.set_gain(self._gain_db)
 
                             self._capturing = True
-                            logger.info("Capture loop started from camera %s", self._cam.get_id())
-                            while self._running:
+                            logger.info("Capture loop started from camera %s", active_cam_id)
+                            while self._running and (self.camera_id is None or self.camera_id == active_cam_id):
                                 try:
                                     frame = self._cam.get_frame(timeout_ms=2000)
                                     img = frame.as_opencv_image()
@@ -279,9 +319,10 @@ class CameraProcessor:
         frame_num = 0
         while True:
             img = np.zeros((480, 640, 3), dtype=np.uint8)
+            cam_name = self.camera_id if self.camera_id is not None else "synthetic_0"
             cv2.putText(
-                img, f"NO CAMERA - test frame {frame_num}", (30, 240),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 0), 2,
+                img, f"NO CAMERA [{cam_name}] - test frame {frame_num}", (30, 240),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 0), 2,
             )
             ok, jpeg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
             if ok:

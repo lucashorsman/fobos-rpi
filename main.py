@@ -69,6 +69,15 @@ async def control_handler(websocket, laser: LaserController, processor: "CameraP
                     reply = {"ok": False, "error": "missing 'value' (gain_db)"}
                 else:
                     processor.set_gain(float(gain_db))
+            elif action in ("get_cameras", "list_cameras"):
+                reply["cameras"] = processor.list_cameras()
+                reply["selected_camera_id"] = processor.camera_id
+            elif action in ("set_camera", "select_camera"):
+                camera_id = cmd.get("camera_id") if "camera_id" in cmd else cmd.get("value")
+                if camera_id is None and "id" in cmd:
+                    camera_id = cmd.get("id")
+                processor.set_camera(camera_id)
+                reply["camera_id"] = camera_id
             elif action == "camera_status":
                 reply["camera"] = processor.status()
             elif action == "status":
