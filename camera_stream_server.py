@@ -236,14 +236,26 @@ class CameraProcessor:
                         logger.warning(self._error)
                         time.sleep(2.0)
                         continue
-                    self._cam = cams[0] if self.camera_id is None else next(
-                        (c for c in cams if c.get_id() == self.camera_id), None
-                    )
+
+                    target_id = self.camera_id
+                    self._cam = None
+
+                    # Try connecting by explicit camera ID via Vimba API first
+                    if target_id:
+                        try:
+                            self._cam = vmb.get_camera_by_id(target_id)
+                            logger.info("Found camera by explicit ID: %s", target_id)
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed to open explicit camera ID '%s': %s -- falling back to first available camera",
+                                target_id, exc
+                            )
+                            self._cam = None
+
+                    # Fallback to cams[0] if no target specified or explicit camera failed
                     if self._cam is None:
-                        self._error = f"Camera ID {self.camera_id} not found"
-                        logger.warning(self._error)
-                        time.sleep(2.0)
-                        continue
+                        self._cam = cams[0]
+                        logger.info("Using default/fallback camera: %s", self._cam.get_id())
 
                     try:
                         with self._cam:
@@ -270,7 +282,7 @@ class CameraProcessor:
 
                             self._capturing = True
                             logger.info("Capture loop started from camera %s", active_cam_id)
-                            while self._running and (self.camera_id is None or self.camera_id == active_cam_id):
+                            while self._running and (self.camera_id is None or self.camera_id == active_cam_id or self.camera_id == target_id):
                                 try:
                                     frame = self._cam.get_frame(timeout_ms=2000)
                                     img = frame.as_opencv_image()

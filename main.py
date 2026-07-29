@@ -26,6 +26,9 @@ from web_preview import WebPreviewServer
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("rpi_bridge.main")
 
+# Default explicit camera ID if not passed via command line (--camera-id)
+DEFAULT_CAMERA_ID: str | None = "DEV_000F3103CB74"
+
 
 async def video_handler(websocket, broadcaster: FrameBroadcaster):
     logger.info("Video client connected: %s", websocket.remote_address)
@@ -136,7 +139,8 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--web-port", type=int, default=8080,
                         help="HTTP port for the browser camera preview (default: 8080)")
-    parser.add_argument("--camera-id", type=str, default=None)
+    parser.add_argument("--camera-id", type=str, default=DEFAULT_CAMERA_ID,
+                        help=f"Target Allied Vision camera ID (default: {DEFAULT_CAMERA_ID})")
     parser.add_argument("--laser-pin", type=int, default=17)
     args = parser.parse_args()
 
