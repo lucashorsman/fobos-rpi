@@ -119,7 +119,7 @@ async def async_main(args):
     capture_thread.start()
 
     # Start the HTTP web preview server (MJPEG stream for browsers)
-    web = WebPreviewServer(broadcaster, processor=processor, port=args.web_port)
+    web = WebPreviewServer(broadcaster, processor=processor, laser=laser, port=args.web_port)
     await web.start()
 
     router = make_router(broadcaster, laser, processor)

@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FOBOS Camera Preview & Laser Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0b0e17;
+    --surface:   rgba(255,255,255,0.04);
+    --border:    rgba(255,255,255,0.08);
+    --text:      #e2e8f0;
+    --text-dim:  #64748b;
+    --accent:    #38bdf8;
+    --green:     #22c55e;
+    --red:       #ef4444;
+    --amber:     #f59e0b;
+    --radius:    12px;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  /* ---- header bar ---- */
+  .header {
+    width: 100%;
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(12px);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: rgba(11,14,23,0.85);
+  }
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .logo {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  .logo span { color: var(--accent); }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .cam-select-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    border-radius: var(--radius);
+    transition: all 0.2s ease;
+  }
+  .cam-select-wrap:hover, .cam-select-wrap:focus-within {
+    border-color: rgba(255,255,255,0.25);
+    background: rgba(255,255,255,0.06);
+  }
+  .cam-select-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .cam-select-dropdown {
+    background: transparent;
+    color: var(--text);
+    border: none;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: inherit;
+    outline: none;
+    cursor: pointer;
+  }
+  .cam-select-dropdown option {
+    background: #151926;
+    color: var(--text);
+  }
+
+  /* ---- status badge ---- */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 4px 12px;
+    border-radius: 9999px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
+    transition: all 0.3s ease;
+  }
+  .badge .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    transition: background 0.3s ease;
+  }
+  .badge.live .dot {
+    background: var(--green);
+    box-shadow: 0 0 8px rgba(34,197,94,0.5);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  .badge.offline .dot {
+    background: var(--red);
+    box-shadow: 0 0 8px rgba(239,68,68,0.4);
+  }
+  .badge.waiting .dot {
+    background: var(--amber);
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.4; }
+  }
+
+  /* ---- main content ---- */
+  .main {
+    flex: 1;
+    width: 100%;
+    max-width: 1200px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+  }
+
+  /* ---- stream container ---- */
+  .stream-wrap {
+    position: relative;
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    aspect-ratio: 4 / 3;       /* fallback until image loads */
+  }
+  .stream-wrap img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
+  }
+
+  /* overlay when disconnected */
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: rgba(0,0,0,0.75);
+    backdrop-filter: blur(4px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+  .overlay.visible { opacity: 1; pointer-events: auto; }
+  .overlay svg { width: 48px; height: 48px; color: var(--text-dim); }
+  .overlay p {
+    font-size: 14px;
+    color: var(--text-dim);
+  }
+  .spinner {
+    width: 24px; height: 24px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---- info cards ---- */
+  .info-row {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+  }
+  .info-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    transition: border-color 0.2s;
+  }
+  .info-card:hover { border-color: rgba(255,255,255,0.15); }
+  .info-card .label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+  .info-card .value {
+    font-size: 18px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- laser control card ---- */
+  .laser-card {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    transition: border-color 0.2s;
+  }
+  .laser-card:hover { border-color: rgba(255,255,255,0.15); }
+
+  .laser-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .laser-title {
+    font-size: 15px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    letter-spacing: -0.01em;
+  }
+  .laser-title .laser-icon {
+    font-size: 16px;
+    color: #f87171;
+  }
+
+  .laser-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 4px 10px;
+    border-radius: 9999px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
+    transition: all 0.3s ease;
+  }
+  .laser-status-pill .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    transition: background 0.3s ease;
+  }
+  .laser-status-pill.active {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.4);
+    color: #fca5a5;
+  }
+  .laser-status-pill.active .dot {
+    background: #ef4444;
+    box-shadow: 0 0 10px rgba(239,68,68,0.8);
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  .laser-controls-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 20px;
+    align-items: center;
+  }
+  @media (max-width: 640px) {
+    .laser-controls-grid { grid-template-columns: 1fr; }
+  }
+
+  .laser-btn {
+    padding: 12px 24px;
+    font-size: 13px;
+    font-weight: 700;
+    font-family: inherit;
+    letter-spacing: 0.04em;
+    color: #fff;
+    background: linear-gradient(135deg, #ef4444, #dc2626);
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(239,68,68,0.3);
+    transition: all 0.2s ease;
+  }
+  .laser-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(239,68,68,0.45);
+  }
+  .laser-btn:active {
+    transform: translateY(0);
+  }
+  .laser-btn.active {
+    background: linear-gradient(135deg, #22c55e, #16a34a);
+    box-shadow: 0 4px 12px rgba(34,197,94,0.3);
+  }
+
+  .laser-slider-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .slider-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .slider-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+  }
+  .slider-val {
+    font-size: 14px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+  }
+  input[type=range] {
+    width: 100%;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+
+  .preset-btns {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .preset-btn {
+    flex: 1;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: inherit;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .preset-btn:hover {
+    background: rgba(255,255,255,0.08);
+    border-color: rgba(255,255,255,0.2);
+  }
+
+  /* ---- footer ---- */
+  .footer {
+    padding: 16px;
+    font-size: 12px;
+    color: var(--text-dim);
+    text-align: center;
+    border-top: 1px solid var(--border);
+    width: 100%;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <div class="logo"><span>FOBOS</span> Camera</div>
+  </div>
+  <div class="header-right">
+    <div class="cam-select-wrap">
+      <label for="cameraSelect" class="cam-select-label">Camera</label>
+      <select id="cameraSelect" class="cam-select-dropdown">
+        <option value="">Loading cameras...</option>
+      </select>
+    </div>
+    <div class="badge waiting" id="statusBadge">
+      <span class="dot"></span>
+      <span id="statusLabel">Connecting</span>
+    </div>
+  </div>
+</div>
+
+<div class="main">
+  <div class="stream-wrap">
+    <img id="stream" src="/stream" alt="Camera stream">
+    <div class="overlay visible" id="overlay">
+      <div class="spinner"></div>
+      <p id="overlayText">Connecting to camera…</p>
+    </div>
+  </div>
+
+  <!-- Laser Control Panel Card -->
+  <div class="laser-card">
+    <div class="laser-card-header">
+      <div class="laser-title">
+        <span class="laser-icon">⚡</span> Laser Control
+      </div>
+      <div class="laser-status-pill" id="laserStatusPill">
+        <span class="dot"></span>
+        <span id="laserStatusText">OFF</span>
+      </div>
+    </div>
+
+    <div class="laser-controls-grid">
+      <div class="laser-toggle-wrap">
+        <button class="laser-btn" id="laserToggleBtn" onclick="toggleLaser()">
+          POWER LASER ON
+        </button>
+      </div>
+
+      <div class="laser-slider-wrap">
+        <div class="slider-header">
+          <label for="laserSlider" class="slider-label">Intensity</label>
+          <span class="slider-val" id="laserSliderVal">0%</span>
+        </div>
+        <input type="range" id="laserSlider" min="0" max="100" value="0" step="1" oninput="onIntensityInput(this.value)" onchange="setLaserIntensity(this.value)">
+        <div class="preset-btns">
+          <button class="preset-btn" onclick="setPreset(25)">25%</button>
+          <button class="preset-btn" onclick="setPreset(50)">50%</button>
+          <button class="preset-btn" onclick="setPreset(75)">75%</button>
+          <button class="preset-btn" onclick="setPreset(100)">100%</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="info-row">
+    <div class="info-card">
+      <div class="label">Status</div>
+      <div class="value" id="camStatus">—</div>
+    </div>
+    <div class="info-card">
+      <div class="label">Exposure</div>
+      <div class="value" id="camExposure">—</div>
+    </div>
+    <div class="info-card">
+      <div class="label">Gain</div>
+      <div class="value" id="camGain">—</div>
+    </div>
+    <div class="info-card">
+      <div class="label">Camera</div>
+      <div class="value" id="camId">—</div>
+    </div>
+  </div>
+</div>
+
+<div class="footer">fobos-rpi bridge &middot; live camera preview</div>
+
+<script>
+(function() {
+  const img       = document.getElementById('stream');
+  const overlay   = document.getElementById('overlay');
+  const overlayTx = document.getElementById('overlayText');
+  const badge     = document.getElementById('statusBadge');
+  const badgeLbl  = document.getElementById('statusLabel');
+  const camSelect = document.getElementById('cameraSelect');
+
+  const laserStatusPill = document.getElementById('laserStatusPill');
+  const laserStatusText = document.getElementById('laserStatusText');
+  const laserToggleBtn  = document.getElementById('laserToggleBtn');
+  const laserSlider     = document.getElementById('laserSlider');
+  const laserSliderVal  = document.getElementById('laserSliderVal');
+
+  let streamOk = false;
+  let retryTimer = null;
+  let currentLaserOn = false;
+  let currentLaserIntensity = 0.0;
+
+  function setStatus(state) {
+    badge.className = 'badge ' + state;
+    if (state === 'live')    badgeLbl.textContent = 'Live';
+    if (state === 'offline') badgeLbl.textContent = 'Offline';
+    if (state === 'waiting') badgeLbl.textContent = 'Connecting';
+  }
+
+  // Stream loaded its first frame
+  img.onload = function() {
+    if (!streamOk) {
+      streamOk = true;
+      overlay.classList.remove('visible');
+      setStatus('live');
+    }
+  };
+
+  // Stream errored or ended
+  img.onerror = function() {
+    streamOk = false;
+    overlay.classList.add('visible');
+    overlayTx.textContent = 'Stream disconnected — retrying…';
+    setStatus('offline');
+    scheduleRetry();
+  };
+
+  function scheduleRetry() {
+    if (retryTimer) return;
+    retryTimer = setTimeout(function() {
+      retryTimer = null;
+      setStatus('waiting');
+      overlayTx.textContent = 'Reconnecting…';
+      // Reload the MJPEG stream by resetting src with cache-buster
+      img.src = '/stream?t=' + Date.now();
+    }, 3000);
+  }
+
+  async function loadCameras() {
+    try {
+      const r = await fetch('/cameras');
+      if (!r.ok) return;
+      const data = await r.json();
+      const cams = data.cameras || [];
+      const selected = data.selected_camera_id;
+
+      camSelect.innerHTML = '';
+      if (cams.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No cameras found';
+        camSelect.appendChild(opt);
+        return;
+      }
+
+      cams.forEach(function(c) {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = c.name || c.id;
+        if (selected ? c.id === selected : c.id === cams[0].id) {
+          opt.selected = true;
+        }
+        camSelect.appendChild(opt);
+      });
+    } catch(e) {}
+  }
+
+  camSelect.addEventListener('change', async function() {
+    const selectedId = camSelect.value;
+    if (!selectedId) return;
+    try {
+      streamOk = false;
+      overlay.classList.add('visible');
+      overlayTx.textContent = 'Switching camera…';
+      setStatus('waiting');
+      const r = await fetch('/select_camera?id=' + encodeURIComponent(selectedId), { method: 'POST' });
+      const res = await r.json();
+      if (res.ok) {
+        setTimeout(function() {
+          img.src = '/stream?t=' + Date.now();
+        }, 1000);
+      }
+    } catch(e) {
+      console.error('Camera switch failed:', e);
+    }
+  });
+
+  function updateLaserUI(status) {
+    if (!status) return;
+    currentLaserOn = status.on || false;
+    currentLaserIntensity = status.intensity != null ? status.intensity : 0.0;
+
+    const pct = Math.round(currentLaserIntensity * 100);
+    laserSliderVal.textContent = pct + '%';
+    laserSlider.value = pct;
+
+    if (currentLaserOn && currentLaserIntensity > 0) {
+      laserStatusPill.className = 'laser-status-pill active';
+      laserStatusText.textContent = 'ACTIVE (' + pct + '%)';
+      laserToggleBtn.textContent = 'TURN LASER OFF';
+      laserToggleBtn.classList.add('active');
+    } else {
+      laserStatusPill.className = 'laser-status-pill';
+      laserStatusText.textContent = 'OFF';
+      laserToggleBtn.textContent = 'POWER LASER ON';
+      laserToggleBtn.classList.remove('active');
+    }
+  }
+
+  window.toggleLaser = async function() {
+    try {
+      const targetState = !currentLaserOn;
+      const intensityVal = currentLaserIntensity > 0 ? currentLaserIntensity : 1.0;
+      const payload = targetState ? { action: 'on', intensity: intensityVal } : { action: 'off' };
+      const r = await fetch('/laser', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await r.json();
+      if (data.ok && data.laser) {
+        updateLaserUI(data.laser);
+      }
+    } catch(e) {
+      console.error('Laser toggle error:', e);
+    }
+  };
+
+  window.onIntensityInput = function(val) {
+    laserSliderVal.textContent = val + '%';
+  };
+
+  window.setLaserIntensity = async function(val) {
+    try {
+      const intensity = parseFloat(val) / 100.0;
+      const action = intensity > 0 ? 'set_intensity' : 'off';
+      const r = await fetch('/laser', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: action, intensity: intensity })
+      });
+      const data = await r.json();
+      if (data.ok && data.laser) {
+        updateLaserUI(data.laser);
+      }
+    } catch(e) {
+      console.error('Laser set intensity error:', e);
+    }
+  };
+
+  window.setPreset = function(pct) {
+    laserSlider.value = pct;
+    onIntensityInput(pct);
+    setLaserIntensity(pct);
+  };
+
+  // Poll /status for camera & laser info
+  async function pollStatus() {
+    try {
+      const r = await fetch('/status');
+      if (!r.ok) return;
+      const s = await r.json();
+      const cam = s.camera || s;
+      document.getElementById('camStatus').textContent =
+        cam.capturing ? 'Capturing' : cam.running ? 'Starting' : 'Stopped';
+      document.getElementById('camExposure').textContent =
+        cam.exposure_us != null ? (cam.exposure_us / 1000).toFixed(1) + ' ms' : '—';
+      document.getElementById('camGain').textContent =
+        cam.gain_db != null ? cam.gain_db.toFixed(1) + ' dB' : '—';
+      document.getElementById('camId').textContent =
+        cam.camera_id ? cam.camera_id.split('/').pop() : '—';
+
+      if (s.laser) {
+        updateLaserUI(s.laser);
+      }
+    } catch(e) {}
+  }
+  setInterval(pollStatus, 3000);
+  pollStatus();
+  loadCameras();
+})();
+</script>
+</body>
+</html>
