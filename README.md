@@ -6,7 +6,7 @@ RPi5 bridge service for **FOBOS** — captures frames from an Allied Vision GigE
 
 The Allied Vision camera speaks GigE Vision, which doesn't survive a VPN hop cleanly. This bridge runs on the Raspberry Pi 5 that's physically connected to the camera and laser hardware, handling:
 
-- **Camera capture** — grabs frames via `vmbpy`, runs any local OpenCV processing (fiducial detection, undistortion, overlays), JPEG-encodes, and pushes them out
+- **Camera capture** — grabs frames via `vmbpy`, JPEG-encodes, and pushes them out
 - **Laser control** — drives the laser diode through an AQY212 transistor on a GPIO pin with PWM intensity control via `gpiozero`
 - **Streaming** — serves frames to the host-side FOBOS GUI over WebSocket and provides a standalone browser-based MJPEG preview with full controls
 
@@ -56,7 +56,7 @@ The **"latest frame wins"** design is intentional — there's no frame queue. Ea
 
 ```bash
 # Clone
-git clone https://github.com/your-org/fobos-rpi.git
+git clone https://github.com/lucashorsman/fobos-rpi.git
 cd fobos-rpi
 
 # Create venv and install (using uv)
@@ -173,9 +173,6 @@ fobos-rpi/
 ```bash
 # Install dev dependencies
 uv sync --extra dev
-
-# Lint
-ruff check .
 
 # Run on a dev machine (no camera/GPIO — uses synthetic fallback)
 python3 main.py
